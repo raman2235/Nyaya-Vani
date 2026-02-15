@@ -5,8 +5,8 @@ from neo4j import GraphDatabase
 
 # --- CONFIGURATION ---
 # Use the URI and ID from your LegalBot instance
-AURA_URI = "neo4j+s://611cf5d1.databases.neo4j.io" 
-AURA_AUTH = ("neo4j", "wfvfnltMZNQcBJyUhjbTIa9yhXPA4GLyp44AyPbRvZs")
+AURA_URI = "your_url" 
+AURA_AUTH = ("neo4j", "your_password")
 
 SYSTEM_PROMPT = """
 Extract legal facts as a JSON list of triples.
