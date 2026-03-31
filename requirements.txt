@@ -1,0 +1,11 @@
+# Speech Module (10 Marks)
+faster-whisper==1.0.3
+pyaudio==0.2.14
+pyttsx3==2.90
+
+# NLP Module (10 Marks)
+ollama==0.1.7
+neo4j==5.18.0
+
+# General Utilities
+wave
