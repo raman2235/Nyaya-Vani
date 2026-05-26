@@ -9,3 +9,5 @@ neo4j==5.18.0
 
 # General Utilities
 wave
+
+python-dotenv

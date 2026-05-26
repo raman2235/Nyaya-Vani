@@ -9,8 +9,8 @@ from faster_whisper import WhisperModel
 from neo4j import GraphDatabase
 
 # --- CONFIGURATION ---
-AURA_URI = "neo4j+s://611cf5d1.databases.neo4j.io"
-AURA_AUTH = ("neo4j", "wfvfnltMZNQcBJyUhjbTIa9yhXPA4GLyp44AyPbRvZs")
+AURA_URI = os.getenv("NEO4J_URI")
+AURA_AUTH = (os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASSWORD"))
 
 os.environ["PATH"] += os.pathsep + r'C:\ffmpeg\bin'
 
