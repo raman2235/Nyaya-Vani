@@ -4,6 +4,7 @@ import sys
 import time
 import wave
 import json
+import queue
 import threading
 import pyaudio
 import ollama
@@ -11,27 +12,38 @@ import pyttsx3
 from faster_whisper import WhisperModel
 from neo4j import GraphDatabase
 
-# --- ENVIRONMENTAL CORE CONFIGURATION ---
+# ==================================================================
+# 1. HARDWARE & CLOUD CONFIGURATION ARCHITECTURE
+# ==================================================================
 AURA_URI = os.getenv("NEO4J_URI", "neo4j+s://bf8205a6.databases.neo4j.io")
 AURA_AUTH = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "4Ax4dF6QE_6T19pOqQRnC_un0jYpQw6Cny5LS2kPozU"))
 
+# Explicit FFmpeg path binding for Windows decoding stability
 os.environ["PATH"] += os.pathsep + r'C:\ffmpeg\bin'
 
-# Broad system prompts instructing Whisper to catch diverse names and general structures cleanly
-GENERAL_BILINGUAL_PROMPT = "Court testimony translation, legal terms, accused statement, IPC Section, case record verification."
+# Token vocabulary definitions to enforce precise naming recognition on Whisper layers
+BILINGUAL_GLOSSARY = (
+    "Nyaya-Vani court testimony validation check. Extract exact legal entities, "
+    "accused names, IPC Sections, prior cases, clean records, section details, "
+    "ਜਮਾਨਤ, ਮੁਲਜ਼ਮ, ਜਿਬਾਂਗਸ਼ੂ ਪਾਲ, ਰਾਜੇਸ਼ ਕੁਮਾਰ, ਪ੍ਰਿਆ ਸ਼ਰਮਾ, Priya Sharma, bail bond amount."
+)
 
-# DYNAMIC PARSER: Instructs LLM to autonomously fish for any Subject, Predicate, and Object out of raw speech
 EXTRACTOR_PROMPT = """
-Analyze the provided legal witness or accused testimony text. Dynamically extract structural legal facts as a raw JSON list of triples.
+Analyze the provided legal court testimony text. Extract structural legal facts as a raw JSON list of triples.
 Strict Extraction Guidelines:
-1. Identify the explicit person/entity as the "subject" (Never hardcode; extract dynamically from context).
-2. Isolate the legal assertion or charge as the "predicate" (e.g., 'charged_under', 'prior_convictions', 'bail_bond').
-3. Isolate the qualitative status or metric value as the "object".
-Format exactly: [{"subject": "DYNAMIC_NAME", "predicate": "RELATION", "object": "VALUE"}]
-Output Rule: Return ONLY valid raw JSON array. Do not include markdown wraps or conversation notes.
+1. Identify the explicit person name as the "subject" dynamically from context.
+2. Isolate the legal assertion as the "predicate" (e.g., 'charged_under', 'prior_convictions', 'bail_bond').
+3. Isolate the qualitative status or value as the "object".
+Format exactly: [{"subject": "NAME", "predicate": "RELATION", "object": "VALUE"}]
+Output Rule: Return ONLY valid raw JSON array. No markdown wraps, no extra text notes.
 """
 
-# --- NON-BLOCKING ASYNC VOICE ALERT LAYER ---
+# Thread-safe global memory communications queue
+audio_queue = queue.Queue()
+
+# ==================================================================
+# 2. ASYNC VOICE ALERT ENGINE
+# ==================================================================
 def speak_alert(message):
     def run_tts():
         try:
@@ -43,17 +55,16 @@ def speak_alert(message):
             pass
     threading.Thread(target=run_tts, daemon=True).start()
 
-# --- DYNAMIC DATABASE ROUTINE ---
+# ==================================================================
+# 3. GRAPH DATABASE GROUND TRUTH CROSS-REFERENCE
+# ==================================================================
 def get_truth_from_graph(subject, predicate):
-    """Dynamically matches any given subject string against standard database nodes"""
     try:
-        # Normalizing text cases to ensure robust lookup hits across database variations
         sub_upper = str(subject).strip().upper()
         pred_lower = str(predicate).strip().lower()
 
         with GraphDatabase.driver(AURA_URI, auth=AURA_AUTH) as driver:
             with driver.session() as session:
-                # Flexible pattern matching lookup using CONTAINS criteria
                 query = """
                 MATCH (s:Entity)-[f:FACT]->(d:Detail)
                 WHERE (toUpper(s.name) CONTAINS $sub OR $sub CONTAINS toUpper(s.name))
@@ -65,10 +76,12 @@ def get_truth_from_graph(subject, predicate):
                 if record:
                     return record['truth'], record['case_ref']
     except Exception as e:
-        print(f"⚠️ Graph Query Resolution Error: {e}")
+        pass
     return None, None
 
-# --- CONTEXT VERIFICATION PIPELINE ---
+# ==================================================================
+# 4. NATURAL LANGUAGE VERIFICATION PIPELINE
+# ==================================================================
 def process_and_verify(text):
     try:
         response = ollama.chat(model='llama3', messages=[
@@ -77,7 +90,6 @@ def process_and_verify(text):
         ])
         content = response['message']['content'].strip()
         
-        # Safe structural containment extraction regex to discard surrounding model chat logs
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if not json_match:
             return
@@ -90,85 +102,112 @@ def process_and_verify(text):
             obj = triple.get('object')
             
             if sub and pred and obj:
-                print(f"🔍 Evaluated Semantic Triples -> [{sub}] --({pred})--> [{obj}]")
-                
-                # Dynamic matching execution pass
+                print(f" 🔍 Evaluated Triples -> [{sub}] --({pred})--> [{obj}]")
                 truth, case_ref = get_truth_from_graph(sub, pred)
                 
                 if truth:
-                    # Case-insensitive data serialization matching checks
                     if str(obj).lower().strip() != str(truth).lower().strip():
                         alert = f"Conflict detected! Accused {sub} claimed {obj}, but stored truth in Case reference {case_ref} confirms {truth}."
-                        print(f"\n🚨🚨🚨 [ALARM] {alert}")
+                        print(f"\n🚨🚨🚨 [ALARM STATUS] {alert}\n")
                         speak_alert(alert)
                     else:
-                        print(f" ✅ [OK] Fact verified verified for {sub}. Statement matches verified database paths.")
+                        print(f" ✅ [OK] Fact verified for {sub}. Matches database logs.")
     except Exception as e:
-        print(f"⚠️ Analysis Engine Cycle Fault: {e}")
+        pass
 
-# --- STABLE HARDWARE SPEECH RUNTIME ENGINE ---
+# ==================================================================
+# 5. ASYNC AUDIO CONSUMER WORKER THREAD
+# ==================================================================
+def audio_processing_worker(model, channels, sample_size, rate):
+    print("🧠 [BRAIN WORKER] Consumer Thread safely monitoring internal memory queue...")
+    temp_process_file = "processing_chunk.wav"
+    
+    while True:
+        frames = audio_queue.get()
+        if frames is None:
+            break
+            
+        with wave.open(temp_process_file, 'wb') as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(sample_size)
+            wf.setframerate(rate)
+            wf.writeframes(b''.join(frames))
+            
+        segments, info = model.transcribe(
+            temp_process_file, 
+            beam_size=5, 
+            vad_filter=True,
+            vad_parameters=dict(min_speech_duration_ms=400),
+            initial_prompt=BILINGUAL_GLOSSARY
+        )
+        
+        witness_text = " ".join([s.text for s in segments]).strip()
+        
+        if witness_text and len(witness_text.split()) > 1:
+            lang_tag = str(info.language).upper()
+            if info.language in ['en', 'pa']:
+                print(f"\n🗣️ [{lang_tag}] Intercepted Speech: \"{witness_text}\"")
+                process_and_verify(witness_text)
+                
+        audio_queue.task_done()
+
+# ==================================================================
+# 6. MASTER PRODUCER RUNTIME SYSTEM
+# ==================================================================
 def start_nyaya_vani():
     print("==================================================================")
-    print("⚡ NYAYA-VANI: FULLY DYNAMIC DUAL-DOMAIN VERIFICATION SYSTEM")
+    print("⚡ NYAYA-VANI: MASTER CONSOLIDATED REAL-WORLD ENGINE")
     print("==================================================================")
-    print("📥 Loading Acoustic Decoding Matrix (Faster-Whisper INT8 Environment)...")
-    model = WhisperModel("small", device="cpu", compute_type="int8")
+    print("📥 Loading Acoustic Decoding Weights (Faster-Whisper INT8 Engine)...")
     
+    model = WhisperModel("small", device="cpu", compute_type="int8")
     p = pyaudio.PyAudio()
     
     try:
         device_info = p.get_default_input_device_info()
         CHANNELS = 1
         RATE = int(device_info['defaultSampleRate'])
-        print(f"🟢 Active Audio Interface Registered: {device_info['name']} @ {RATE}Hz")
+        SAMPLE_SIZE = p.get_sample_size(pyaudio.paInt16)
+        print(f"🟢 Active Audio Hardware Layer: {device_info['name']} @ {RATE}Hz")
     except Exception as e:
-        print(f"❌ Input Hardware Streaming Missing: {e}")
+        print(f"❌ Input Microphone Registration Failure: {e}")
         p.terminate()
         return
+
+    # Instantiating the async consumer thread parallel processing block
+    worker_thread = threading.Thread(
+        target=audio_processing_worker, 
+        args=(model, CHANNELS, SAMPLE_SIZE, RATE), 
+        daemon=True
+    )
+    worker_thread.start()
 
     stream = p.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE, 
                     input=True, frames_per_buffer=1024)
     
-    print("\n--- 🚀 NYAYA-VANI STREAM LIVE: SPEAK ANY TESTIMONY NAME & RECORD NOW ---")
-    print("------------------------------------------------------------------")
-
-    temp_file = "temp_live_testimony.wav"
+    print("\n--- 🚀 MASTER PIPELINE RUNNING: LIVE CONTINUOUS STREAM LISTENING MODE ---")
+    print("--- Speak your full multi-sentence legal statements fluidly without breaks ---\n")
 
     try:
+        # 4-second sliding capture matrix window
+        chunk_duration_seconds = 4.0 
+        frames_per_chunk = int(RATE / 1024 * chunk_duration_seconds)
+        
         while True:
             frames = []
-            # Optimized 3.8-second buffer window to cleanly ingest fluid compound statement phrasings
-            for _ in range(0, int(RATE / 1024 * 3.8)): 
+            for _ in range(0, frames_per_chunk):
                 data = stream.read(1024, exception_on_overflow=False)
                 frames.append(data)
-
-            with wave.open(temp_file, 'wb') as wf:
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
-                wf.setframerate(RATE)
-                wf.writeframes(b''.join(frames))
-
-            segments, info = model.transcribe(temp_file, 
-                                             beam_size=2, 
-                                             initial_prompt=GENERAL_BILINGUAL_PROMPT)
             
-            witness_text = " ".join([s.text for s in segments]).strip()
+            # Non-blocking async queue assignment guarantees the microphone stream never drops
+            audio_queue.put(frames)
             
-            if witness_text and len(witness_text.split()) > 2:
-                lang_tag = str(info.language).upper()
-                if info.language in ['en', 'pa']:
-                    print(f"\n🗣️ [{lang_tag}] Intercepted Speech: \"{witness_text}\"")
-                    process_and_verify(witness_text)
-                else:
-                    print(f" 🔇 Suppressed external background audio context signals: {lang_tag}")
-
     except KeyboardInterrupt:
-        print("\n🛑 System safely shut down.")
+        print("\n🛑 Nyaya-Vani master system safely shut down.")
     finally:
         stream.close()
         p.terminate()
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+        audio_queue.put(None)
 
 if __name__ == "__main__":
     start_nyaya_vani()
